@@ -63,7 +63,13 @@ DISCORD_TOKEN=dein_bot_token_hier
 # GUILD_ID=123456789012345678
 ```
 
-### 3. Bot starten
+### 3. Erforderliche Bot-Berechtigungen (Discord Developer Portal)
+
+Im Discord Developer Portal unter OAuth2 -> URL Generator folgende Scopes und Berechtigungen vergeben:
+- Scopes: bot, applications.commands
+- Bot Permissions: Send Messages, Embed Links, Use Slash Commands
+
+### 4. Bot starten
 
 ```bash
 python bot.py
