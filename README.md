@@ -8,7 +8,7 @@ Discord-Bot, der zufällig einen Valorant-Agenten auswählt – optional nach Ro
 | :--- | :--- | :--- |
 | `/agent` | `role` (optional) | Zufälliger Agent. Filter: Duelist, Initiator, Controller, Sentinel. |
 
-Der Reroll-Button ist 180 Sekunden aktiv und nur für den Aufrufer nutzbar. Die Agentendaten kommen von [valorant-api.com](https://valorant-api.com).
+Der Reroll-Button ist 180 Sekunden aktiv, nur für den Aufrufer nutzbar und wiederholt nie direkt denselben Agenten. Die Agentendaten kommen von [valorant-api.com](https://valorant-api.com) und werden alle 24 Stunden aktualisiert.
 
 ## Setup
 
