@@ -1,89 +1,38 @@
-# Valorant Discord Agent Selector Bot
+# Valorant Agent Bot
 
-Discord-Bot zur zufälligen Auswahl von Valorant-Agenten mit optionaler Rollenfilterung und interaktiver Reroll-Funktion.
+Discord-Bot, der zufällig einen Valorant-Agenten auswählt – optional nach Rolle gefiltert, mit Reroll-Button.
 
----
-
-## Funktionsumfang
-
-- **Rollenbasierte Auswahl:** Filterung nach den offiziellen Valorant-Rollen (*Duelist*, *Initiator*, *Controller*, *Sentinel*).
-- **Interaktiver Reroll-Button:** Erlaubt dem aufrufenden Nutzer, direkt in Discord ohne erneute Befehlseingabe einen neuen Agenten aus dem gewählten Pool zu ziehen (Timeout: 180 Sekunden).
-- **Dynamischer Datenabruf:** Automatische Synchronisation der spielbaren Agenten, Icons und Rollenbeschreibungen über die offizielle `valorant-api.com` beim Bot-Start.
-- **Slash Commands (`app_commands`):** Moderne Discord-Befehlsintegration mit automatischer Parameter-Vervollständigung.
-
----
-
-## Befehle
+## Befehl
 
 | Befehl | Parameter | Beschreibung |
 | :--- | :--- | :--- |
-| `/agent` | `role` (Optional) | Wählt einen zufälligen Agenten. Filterbar nach Duelist, Initiator, Controller oder Sentinel. |
+| `/agent` | `role` (optional) | Zufälliger Agent. Filter: Duelist, Initiator, Controller, Sentinel. |
 
----
+Der Reroll-Button ist 180 Sekunden aktiv und nur für den Aufrufer nutzbar. Die Agentendaten kommen von [valorant-api.com](https://valorant-api.com).
 
-## Technologie-Stack
+## Setup
 
-- **Python 3.10+**
-- **`discord.py` (v2.x):** Asynchroner Discord API Client mit UI-Views und Slash-Commands.
-- **`aiohttp`:** Asynchrone HTTP-Requests zum Abruf der Agenten-Daten.
-- **`python-dotenv`:** Sichere Verwaltung von Umgebungsvariablen.
-
----
-
-## Installation & Lokaler Start
-
-### 1. Repository klonen & Abhängigkeiten installieren
+Voraussetzung: Python 3.10+
 
 ```bash
 git clone git@github.com:Failexius/discord-bot-valorant.git
 cd discord-bot-valorant
-
-# Virtuelle Umgebung erstellen und aktivieren
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Abhängigkeiten installieren
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 2. Konfiguration (`.env`)
-
-Erstelle eine `.env`-Datei auf Basis der Beispieldatei:
-
-```bash
-cp .env.example .env
-```
-
-Füge dein Discord-Bot-Token ein:
-
-```env
-DISCORD_TOKEN=dein_bot_token_hier
-
-# Optional: Server-ID für sofortige lokale Befehlssynchronisation zu Testzwecken
-# GUILD_ID=123456789012345678
-```
-
-### 3. Erforderliche Bot-Berechtigungen (Discord Developer Portal)
-
-Im Discord Developer Portal unter OAuth2 -> URL Generator folgende Scopes und Berechtigungen vergeben:
-- Scopes: bot, applications.commands
-- Bot Permissions: Send Messages, Embed Links, Use Slash Commands
-
-### 4. Bot starten
-
-```bash
+cp .env.example .env   # DISCORD_TOKEN eintragen
 python bot.py
 ```
 
----
+`.env`:
 
-## Projektstruktur
+| Variable | Pflicht | Beschreibung |
+| :--- | :--- | :--- |
+| `DISCORD_TOKEN` | ja | Bot-Token aus dem Discord Developer Portal |
+| `GUILD_ID` | nein | Server-ID für sofortiges Command-Sync beim Testen (sonst global, bis zu 1 h Verzögerung) |
 
-```text
-discord-bot-valorant/
-├── bot.py                # Bot-Client, API-Loader, Reroll-View & Slash-Commands
-├── requirements.txt      # Python-Abhängigkeiten
-├── .env.example          # Vorlage für Umgebungsvariablen
-├── .gitignore            # Git-Ausschlussregeln
-└── README.md             # Technische Dokumentation
-```
+## Bot einladen
+
+Developer Portal → OAuth2 → URL Generator:
+
+- Scopes: `bot`, `applications.commands`
+- Permissions: `Send Messages`, `Embed Links`

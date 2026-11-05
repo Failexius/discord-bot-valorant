@@ -9,11 +9,42 @@ from typing import Optional
 
 load_dotenv()
 
-VALORANT_AGENTS = []
+VALORANT_AGENTS: list[dict] = []
+_load_lock = asyncio.Lock()
 
-intents = discord.Intents.default()
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
+# Optional: GUILD_ID beim Start validieren, damit Fehler sofort sichtbar sind.
+_guild_id_raw = os.getenv("GUILD_ID")
+try:
+    GUILD_ID = int(_guild_id_raw) if _guild_id_raw else None
+except ValueError:
+    raise SystemExit(f"GUILD_ID must be a number, got: {_guild_id_raw!r}")
+
+
+class ValorantBot(discord.Client):
+    def __init__(self):
+        super().__init__(intents=discord.Intents.default())
+        self.tree = app_commands.CommandTree(self)
+
+    async def setup_hook(self):
+        # Läuft genau einmal pro Prozessstart (im Gegensatz zu on_ready).
+        await get_agents()
+        if not VALORANT_AGENTS:
+            print("WARNING: Could not load Valorant agents from the API.")
+        else:
+            print(f"{len(VALORANT_AGENTS)} Valorant agents loaded from the API.")
+
+        if GUILD_ID:
+            # Instant sync for a single (test) server
+            guild = discord.Object(id=GUILD_ID)
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+        else:
+            # Global sync (can take up to an hour to propagate)
+            await self.tree.sync()
+
+
+client = ValorantBot()
+tree = client.tree
 
 
 def create_agent_embed(agent_data: dict) -> discord.Embed:
@@ -75,24 +106,24 @@ async def load_valorant_agents(retries: int = 3) -> list[dict]:
     return []
 
 
+async def get_agents() -> list[dict]:
+    """Liefert die Agentenliste und lädt sie bei Bedarf (ein Reload gleichzeitig)."""
+    global VALORANT_AGENTS
+    if not VALORANT_AGENTS:
+        async with _load_lock:
+            if not VALORANT_AGENTS:
+                VALORANT_AGENTS = await load_valorant_agents()
+    return VALORANT_AGENTS
+
+
+def pick_agent(role_name: Optional[str]) -> Optional[dict]:
+    """Zufälliger Agent, optional gefiltert nach Rolle. None, wenn der Pool leer ist."""
+    pool = [a for a in VALORANT_AGENTS if not role_name or a.get("role") == role_name]
+    return random.choice(pool) if pool else None
+
+
 @client.event
 async def on_ready():
-    global VALORANT_AGENTS
-    VALORANT_AGENTS = await load_valorant_agents()
-    if VALORANT_AGENTS:
-        print(f"{len(VALORANT_AGENTS)} Valorant agents loaded from the API.")
-    else:
-        print("WARNING: Could not load Valorant agents from the API.")
-
-    guild_id = os.getenv("GUILD_ID")
-    if guild_id:
-        # Instant sync for a single (test) server
-        guild = discord.Object(id=int(guild_id))
-        tree.copy_global_to(guild=guild)
-        await tree.sync(guild=guild)
-    else:
-        # Global sync (can take up to an hour to propagate)
-        await tree.sync()
     print(f"Logged in as {client.user} – Commands synchronized!")
 
 
@@ -124,20 +155,16 @@ class RerollView(discord.ui.View):
     async def reroll_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        # Filter anwenden, falls eine Rolle aktiv ist
-        pool = VALORANT_AGENTS
-        if self.selected_role:
-            pool = [a for a in VALORANT_AGENTS if a.get("role") == self.selected_role]
-
-        if not pool:
+        selected_agent = pick_agent(self.selected_role)
+        if not selected_agent:
             await interaction.response.send_message(
                 "Keine passenden Agenten gefunden.", ephemeral=True
             )
             return
 
-        selected_agent = random.choice(pool)
-        embed = create_agent_embed(selected_agent)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.response.edit_message(
+            embed=create_agent_embed(selected_agent), view=self
+        )
 
 
 @tree.command(name="agent", description="Chooses a random Valorant agent for you.")
@@ -153,42 +180,24 @@ class RerollView(discord.ui.View):
 async def agent(
     interaction: discord.Interaction, role: Optional[app_commands.Choice[str]] = None
 ):
-    global VALORANT_AGENTS
-    deferred = False
-
-    if not VALORANT_AGENTS:
-        # Startup load failed – try to reload once. Defer because the request
-        # may take longer than Discord's 3 second response window.
+    # Ist die Liste leer, wird neu geladen. Dann vorher defern, weil der Request
+    # länger als Discords 3-Sekunden-Fenster dauern kann.
+    deferred = not VALORANT_AGENTS
+    if deferred:
         await interaction.response.defer(thinking=True)
-        deferred = True
-        VALORANT_AGENTS = await load_valorant_agents(retries=1)
-        if not VALORANT_AGENTS:
-            await interaction.followup.send(
-                "Agentenliste konnte nicht geladen werden. Bitte später erneut versuchen.",
-                ephemeral=True,
-            )
-            return
+        await get_agents()
 
-    # Pool nach Wahl filtern oder alle nehmen
     role_name = role.value if role else None
-    pool = (
-        [a for a in VALORANT_AGENTS if a.get("role") == role_name]
-        if role_name
-        else VALORANT_AGENTS
-    )
-
-    if not pool:
-        msg = "Keine passenden Agenten gefunden."
+    selected_agent = pick_agent(role_name)
+    if not selected_agent:
+        msg = "Keine passenden Agenten gefunden (Agentenliste evtl. nicht ladbar)."
         if deferred:
             await interaction.followup.send(msg, ephemeral=True)
         else:
             await interaction.response.send_message(msg, ephemeral=True)
         return
 
-    selected_agent = random.choice(pool)
     embed = create_agent_embed(selected_agent)
-
-    # Rolle und Autor an die View übergeben
     view = RerollView(author_id=interaction.user.id, selected_role=role_name)
     if deferred:
         view.message = await interaction.followup.send(embed=embed, view=view, wait=True)
