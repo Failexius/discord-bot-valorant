@@ -1,13 +1,17 @@
 import asyncio
+import logging
 import os
 from dotenv import load_dotenv
 import discord
 from discord import app_commands
+from discord.ext import tasks
 import random
 import aiohttp
 from typing import Optional
 
 load_dotenv()
+
+log = logging.getLogger(__name__)
 
 VALORANT_AGENTS: list[dict] = []
 _load_lock = asyncio.Lock()
@@ -27,11 +31,8 @@ class ValorantBot(discord.Client):
 
     async def setup_hook(self):
         # Läuft genau einmal pro Prozessstart (im Gegensatz zu on_ready).
-        await get_agents()
-        if not VALORANT_AGENTS:
-            print("WARNING: Could not load Valorant agents from the API.")
-        else:
-            print(f"{len(VALORANT_AGENTS)} Valorant agents loaded from the API.")
+        # Lädt die Agenten sofort und danach alle 24 h neu.
+        refresh_agents.start()
 
         if GUILD_ID:
             # Instant sync for a single (test) server
@@ -60,50 +61,64 @@ def create_agent_embed(agent_data: dict) -> discord.Embed:
     return embed
 
 
+def _parse_agent(item: dict) -> Optional[dict]:
+    """Wandelt einen API-Eintrag in unser Format um. None bei kaputten Daten."""
+    try:
+        return {
+            "name": item["displayName"],
+            "icon": item.get("displayIcon"),
+            "role": item["role"]["displayName"] if item.get("role") else "Unknown",
+            "description": item.get("description", "No description available."),
+        }
+    except (KeyError, TypeError):
+        return None
+
+
 async def load_valorant_agents(retries: int = 3) -> list[dict]:
     url = "https://valorant-api.com/v1/agents?isPlayableCharacter=true"
     timeout = aiohttp.ClientTimeout(total=10)
 
-    for attempt in range(1, retries + 1):
-        try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, retries + 1):
+            try:
                 async with session.get(url) as response:
                     if response.status != 200:
-                        print(
-                            f"Valorant API returned status {response.status} "
-                            f"(attempt {attempt}/{retries})"
+                        log.warning(
+                            "Valorant API returned status %s (attempt %d/%d)",
+                            response.status, attempt, retries,
                         )
                     else:
                         data = await response.json()
-                        agents = []
-                        for item in data.get("data", []):
-                            try:
-                                agents.append(
-                                    {
-                                        "name": item["displayName"],
-                                        "icon": item.get("displayIcon"),
-                                        "role": (
-                                            item["role"]["displayName"]
-                                            if item.get("role")
-                                            else "Unknown"
-                                        ),
-                                        "description": item.get(
-                                            "description", "No description available."
-                                        ),
-                                    }
-                                )
-                            except (KeyError, TypeError):
-                                continue  # skip malformed entry
+                        parsed = (_parse_agent(i) for i in data.get("data", []))
+                        agents = [a for a in parsed if a]
                         if agents:
                             return agents
-                        print(f"Valorant API returned no agents (attempt {attempt}/{retries})")
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
-            print(f"Error loading Valorant agents (attempt {attempt}/{retries}): {e}")
+                        log.warning(
+                            "Valorant API returned no agents (attempt %d/%d)",
+                            attempt, retries,
+                        )
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+                log.warning(
+                    "Error loading Valorant agents (attempt %d/%d): %s",
+                    attempt, retries, e,
+                )
 
-        if attempt < retries:
-            await asyncio.sleep(2 * attempt)
+            if attempt < retries:
+                await asyncio.sleep(2 * attempt)
 
     return []
+
+
+@tasks.loop(hours=24)
+async def refresh_agents():
+    """Hält die Liste aktuell. Bei einem Fehler bleibt die alte Liste bestehen."""
+    global VALORANT_AGENTS
+    agents = await load_valorant_agents()
+    if agents:
+        VALORANT_AGENTS = agents
+        log.info("%d Valorant agents loaded from the API.", len(agents))
+    else:
+        log.warning("Could not refresh Valorant agents; keeping %d.", len(VALORANT_AGENTS))
 
 
 async def get_agents() -> list[dict]:
@@ -116,22 +131,32 @@ async def get_agents() -> list[dict]:
     return VALORANT_AGENTS
 
 
-def pick_agent(role_name: Optional[str]) -> Optional[dict]:
-    """Zufälliger Agent, optional gefiltert nach Rolle. None, wenn der Pool leer ist."""
+def pick_agent(
+    role_name: Optional[str], exclude: Optional[str] = None
+) -> Optional[dict]:
+    """Zufälliger Agent, optional nach Rolle gefiltert. None, wenn der Pool leer ist.
+
+    `exclude` (Agentenname) wird übersprungen, solange noch eine Alternative existiert.
+    """
     pool = [a for a in VALORANT_AGENTS if not role_name or a.get("role") == role_name]
+    others = [a for a in pool if a["name"] != exclude]
+    pool = others or pool
     return random.choice(pool) if pool else None
 
 
 @client.event
 async def on_ready():
-    print(f"Logged in as {client.user} – Commands synchronized!")
+    log.info("Logged in as %s", client.user)
 
 
 class RerollView(discord.ui.View):
-    def __init__(self, author_id: int, selected_role: Optional[str] = None):
+    def __init__(
+        self, author_id: int, selected_role: Optional[str], current_agent: str
+    ):
         super().__init__(timeout=180)
         self.author_id = author_id
         self.selected_role = selected_role
+        self.current_agent = current_agent
         self.message = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -155,13 +180,14 @@ class RerollView(discord.ui.View):
     async def reroll_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        selected_agent = pick_agent(self.selected_role)
+        selected_agent = pick_agent(self.selected_role, exclude=self.current_agent)
         if not selected_agent:
             await interaction.response.send_message(
                 "Keine passenden Agenten gefunden.", ephemeral=True
             )
             return
 
+        self.current_agent = selected_agent["name"]
         await interaction.response.edit_message(
             embed=create_agent_embed(selected_agent), view=self
         )
@@ -198,7 +224,7 @@ async def agent(
         return
 
     embed = create_agent_embed(selected_agent)
-    view = RerollView(author_id=interaction.user.id, selected_role=role_name)
+    view = RerollView(interaction.user.id, role_name, selected_agent["name"])
     if deferred:
         view.message = await interaction.followup.send(embed=embed, view=view, wait=True)
     else:
